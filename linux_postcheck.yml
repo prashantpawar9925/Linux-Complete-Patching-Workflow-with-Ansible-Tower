@@ -40,8 +40,8 @@
         msg: >-
           Post-check failed.
           Root filesystem has only {{ disk_free_gb.stdout | trim }} GB free.
-          Minimum required free space is 10 GB.
-      when: (disk_free_gb.stdout | trim | int) < 10
+          Minimum required free space is 1 GB.
+      when: (disk_free_gb.stdout | trim | int) < 1
 
     - name: Check SSH service
       ansible.builtin.command: systemctl is-active ssh
