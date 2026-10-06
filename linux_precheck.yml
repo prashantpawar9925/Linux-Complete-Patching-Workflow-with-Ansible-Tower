@@ -31,13 +31,13 @@
       register: disk_free_gb
       changed_when: false
 
-    - name: Fail if root filesystem has less than 10 GB free
+    - name: Fail if root filesystem has less than 1 GB free
       ansible.builtin.fail:
         msg: >-
           Pre-check failed.
           Root filesystem has only {{ disk_free_gb.stdout | trim }} GB free.
-          Minimum required free space is 10 GB.
-      when: (disk_free_gb.stdout | trim | int) < 10
+          Minimum required free space is 1 GB.
+      when: (disk_free_gb.stdout | trim | int) < 1
 
     - name: Check uptime
       ansible.builtin.command: uptime
