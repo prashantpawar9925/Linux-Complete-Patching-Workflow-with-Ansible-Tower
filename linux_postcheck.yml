@@ -1,0 +1,98 @@
+---
+- name: Ubuntu Post-Patch Validation
+  hosts: Ubuntu-Server
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Test connectivity
+      ansible.builtin.ping:
+
+    - name: Get hostname
+      ansible.builtin.command: hostname
+      register: hostname_result
+      changed_when: false
+
+    - name: Check Ubuntu version
+      ansible.builtin.command: lsb_release -ds
+      register: ubuntu_version
+      changed_when: false
+
+    - name: Check uptime
+      ansible.builtin.command: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: Check root filesystem
+      ansible.builtin.command: df -h /
+      register: disk_result
+      changed_when: false
+
+    - name: Check root filesystem free space
+      ansible.builtin.shell: |
+        df --output=avail / | tail -1 | awk '{print int($1/1024/1024)}'
+      register: disk_free_gb
+      changed_when: false
+
+    - name: Fail if root filesystem has less than 10 GB free
+      ansible.builtin.fail:
+        msg: >-
+          Post-check failed.
+          Root filesystem has only {{ disk_free_gb.stdout | trim }} GB free.
+          Minimum required free space is 10 GB.
+      when: (disk_free_gb.stdout | trim | int) < 10
+
+    - name: Check SSH service
+      ansible.builtin.command: systemctl is-active ssh
+      register: ssh_service
+      changed_when: false
+      failed_when: false
+
+    - name: Check if reboot is still required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Display post-check results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "UBUNTU POST-PATCH VALIDATION"
+          - "=========================================="
+          - "Hostname: {{ hostname_result.stdout }}"
+          - "Ubuntu Version: {{ ubuntu_version.stdout }}"
+          - "Uptime: {{ uptime_result.stdout }}"
+          - "Root Filesystem:"
+          - "{{ disk_result.stdout }}"
+          - "Free Space: {{ disk_free_gb.stdout | trim }} GB"
+          - "SSH Service: {{ ssh_service.stdout | trim }}"
+          - "Reboot Required: {{ reboot_required.stat.exists }}"
+          - "=========================================="
+
+    - name: Fail if reboot is still required
+      ansible.builtin.fail:
+        msg: "Post-check failed: Ubuntu server still requires a reboot."
+      when: reboot_required.stat.exists
+
+    - name: Fail if SSH service is not running
+      ansible.builtin.fail:
+        msg: >-
+          Post-check failed: SSH service is not running.
+          Current state: {{ ssh_service.stdout | trim }}
+      when: ssh_service.stdout | trim != "active"
+
+    - name: Post-check successful
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "UBUNTU POST-PATCH VALIDATION PASSED"
+          - "=========================================="
+          - "Connectivity       : PASS"
+          - "Operating System   : PASS"
+          - "Disk Space         : PASS"
+          - "SSH Service        : PASS"
+          - "Reboot Status      : PASS"
+          - "=========================================="
+          - "Ubuntu patch workflow completed successfully."
+          - "=========================================="
