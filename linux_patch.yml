@@ -1,0 +1,63 @@
+---
+- name: Patch Ubuntu Server
+  hosts: Ubuntu-Server
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Update APT cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Upgrade installed packages
+      ansible.builtin.apt:
+        upgrade: dist
+        state: present
+      register: patch_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Display patch result
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "UBUNTU PATCH RESULT"
+          - "=========================================="
+          - "Packages changed: {{ patch_result.changed }}"
+          - "Reboot required: {{ reboot_required.stat.exists }}"
+          - "=========================================="
+
+    - name: Reboot Ubuntu server if required
+      ansible.builtin.reboot:
+        reboot_timeout: 1800
+        connect_timeout: 10
+        test_command: uptime
+      when: reboot_required.stat.exists
+      register: reboot_result
+
+    - name: Display reboot result
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "REBOOT RESULT"
+          - "=========================================="
+          - "Server rebooted: {{ reboot_result.changed | default(false) }}"
+          - "Ubuntu server is reachable after reboot."
+          - "=========================================="
+      when: reboot_required.stat.exists
+
+    - name: Patch process completed successfully
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "UBUNTU PATCH COMPLETED"
+          - "=========================================="
+          - "Package upgrade completed."
+          - "Reboot handling completed."
+          - "Server is ready for post-patch validation."
+          - "=========================================="
