@@ -1,0 +1,64 @@
+---
+- name: Verify Ubuntu EBS Snapshot Automatically
+  hosts: Ubuntu-Server
+  gather_facts: false
+
+  tasks:
+
+    - name: Find Ubuntu pre-patch snapshots
+      amazon.aws.ec2_snapshot_info:
+        region: ap-south-1
+        filters:
+          "tag:PatchWorkflow": "Linux-Patching"
+          "tag:ServerIP": "{{ ansible_host }}"
+      delegate_to: localhost
+      register: snapshot_info
+
+    - name: Fail if no snapshot was found
+      ansible.builtin.fail:
+        msg: >-
+          No Ubuntu pre-patch snapshot was found for server
+          {{ ansible_host }}.
+      when: snapshot_info.snapshots | length == 0
+
+    - name: Select latest snapshot
+      ansible.builtin.set_fact:
+        latest_snapshot: >-
+          {{
+            snapshot_info.snapshots
+            | sort(attribute='start_time', reverse=true)
+            | first
+          }}
+
+    - name: Display snapshot status
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "UBUNTU SNAPSHOT VERIFICATION"
+          - "=========================================="
+          - "Ubuntu Server IP: {{ ansible_host }}"
+          - "Snapshot ID: {{ latest_snapshot.snapshot_id }}"
+          - "Snapshot State: {{ latest_snapshot.state }}"
+          - "Snapshot Progress: {{ latest_snapshot.progress }}"
+          - "Snapshot Description: {{ latest_snapshot.description }}"
+          - "Snapshot Start Time: {{ latest_snapshot.start_time }}"
+          - "=========================================="
+
+    - name: Fail if snapshot is not completed
+      ansible.builtin.fail:
+        msg: >-
+          Snapshot verification failed.
+          Snapshot ID: {{ latest_snapshot.snapshot_id }}
+          Current state: {{ latest_snapshot.state }}
+      when: latest_snapshot.state != "completed"
+
+    - name: Confirm snapshot is completed
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "SNAPSHOT VERIFICATION SUCCESSFUL"
+          - "=========================================="
+          - "Snapshot ID: {{ latest_snapshot.snapshot_id }}"
+          - "State: {{ latest_snapshot.state }}"
+          - "Snapshot is ready for Ubuntu patching."
+          - "=========================================="
