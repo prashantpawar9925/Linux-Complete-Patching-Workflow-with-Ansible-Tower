@@ -35,7 +35,7 @@
       register: disk_free_gb
       changed_when: false
 
-    - name: Fail if root filesystem has less than 10 GB free
+    - name: Fail if root filesystem has less than 1 GB free
       ansible.builtin.fail:
         msg: >-
           Post-check failed.
