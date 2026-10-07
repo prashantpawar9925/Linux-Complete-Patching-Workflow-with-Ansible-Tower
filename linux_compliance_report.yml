@@ -1,4 +1,3 @@
-
 ---
 - name: Generate Linux Patch Compliance Report
   hosts: Ubuntu-Server
@@ -8,31 +7,37 @@
   tasks:
 
     # ============================================================
-    # SERVER INFORMATION
+    # 1. SERVER INFORMATION
     # ============================================================
 
-    - name: Get hostname
+    - name: Record compliance report start time
+      ansible.builtin.set_fact:
+        compliance_report_start: "{{ lookup('pipe', 'date +%H:%M:%S') }}"
+
+    - name: Get server hostname
       ansible.builtin.command: hostname
       register: hostname_result
       changed_when: false
 
-    - name: Get Ubuntu version
-      ansible.builtin.command: lsb_release -ds
-      register: ubuntu_version
-      changed_when: false
-
     - name: Get server IP address
-      ansible.builtin.command: hostname -I
+      ansible.builtin.shell: |
+        hostname -I | awk '{print $1}'
       register: ip_address
       changed_when: false
 
-    - name: Get uptime
-      ansible.builtin.command: uptime
-      register: uptime_result
+    - name: Get kernel version
+      ansible.builtin.command: uname -r
+      register: kernel_version
       changed_when: false
 
+    - name: Get operating system
+      ansible.builtin.command: lsb_release -ds
+      register: ubuntu_version
+      changed_when: false
+      failed_when: false
+
     # ============================================================
-    # DISK CHECK
+    # 2. DISK VALIDATION
     # ============================================================
 
     - name: Check root filesystem
@@ -40,23 +45,46 @@
       register: disk_result
       changed_when: false
 
-    - name: Check root filesystem free space
+    - name: Check root filesystem free space in GB
       ansible.builtin.shell: |
         df --output=avail / | tail -1 | awk '{print int($1/1024/1024)}'
       register: disk_free_gb
       changed_when: false
 
+    - name: Set minimum required disk space
+      ansible.builtin.set_fact:
+        minimum_disk_gb: 1
+
+    - name: Determine disk validation status
+      ansible.builtin.set_fact:
+        disk_status: >-
+          {{
+            'PASS'
+            if (disk_free_gb.stdout | trim | int) >= minimum_disk_gb
+            else 'FAIL'
+          }}
+
     # ============================================================
-    # REBOOT CHECK
+    # 3. CONNECTIVITY VALIDATION
     # ============================================================
 
-    - name: Check if reboot is required
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: reboot_required
+    - name: Validate local connectivity
+      ansible.builtin.command: ping -c 2 -W 2 8.8.8.8
+      register: connectivity_check
+      changed_when: false
+      failed_when: false
+
+    - name: Determine connectivity status
+      ansible.builtin.set_fact:
+        connectivity_status: >-
+          {{
+            'PASS'
+            if connectivity_check.rc == 0
+            else 'FAIL'
+          }}
 
     # ============================================================
-    # SSH SERVICE CHECK
+    # 4. SSH SERVICE VALIDATION
     # ============================================================
 
     - name: Check SSH service
@@ -65,16 +93,62 @@
       changed_when: false
       failed_when: false
 
+    - name: Determine SSH status
+      ansible.builtin.set_fact:
+        ssh_status: >-
+          {{
+            'PASS'
+            if (ssh_service.stdout | trim) == 'active'
+            else 'FAIL'
+          }}
+
     # ============================================================
-    # READ PATCH ACTIVITY FROM CURRENT AWX PATCH RUN
+    # 5. REBOOT VALIDATION
     # ============================================================
 
-    - name: Check if AWX patch activity file exists
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Determine reboot status
+      ansible.builtin.set_fact:
+        reboot_status: >-
+          {{
+            'PASS'
+            if not reboot_required.stat.exists
+            else 'FAIL'
+          }}
+
+    # ============================================================
+    # 6. SERVER REACHABILITY
+    # ============================================================
+
+    - name: Validate Ansible connection
+      ansible.builtin.command: echo "Server reachable"
+      register: reachability_check
+      changed_when: false
+      failed_when: false
+
+    - name: Determine server reachability
+      ansible.builtin.set_fact:
+        server_reachable: >-
+          {{
+            'PASS'
+            if reachability_check.rc == 0
+            else 'FAIL'
+          }}
+
+    # ============================================================
+    # 7. PATCH ACTIVITY
+    # ============================================================
+
+    - name: Check whether patch activity file exists
       ansible.builtin.stat:
         path: /var/tmp/awx_patch_activity.txt
       register: patch_activity_file
 
-    - name: Read AWX patch activity
+    - name: Read patch activity file
       ansible.builtin.slurp:
         src: /var/tmp/awx_patch_activity.txt
       register: patch_activity
@@ -87,14 +161,10 @@
             patch_activity.content | b64decode
             if patch_activity_file.stat.exists
             else
-            'No patch activity file found.'
+            'No patch activity recorded.'
           }}
 
-    # ============================================================
-    # COUNT PATCHES
-    # ============================================================
-
-    - name: Count packages updated
+    - name: Count packages changed
       ansible.builtin.shell: |
         if [ -s /var/tmp/awx_patch_activity.txt ]; then
           wc -l < /var/tmp/awx_patch_activity.txt
@@ -105,7 +175,82 @@
       changed_when: false
 
     # ============================================================
-    # DETERMINE COMPLIANCE
+    # 8. PATCH OPERATION VALIDATION
+    # ============================================================
+
+    - name: Determine patch operation status
+      ansible.builtin.set_fact:
+        patch_operation_status: >-
+          {{
+            'PASS'
+            if patch_activity_file.stat.exists
+            and (package_count.stdout | trim | int) >= 0
+            else 'FAIL'
+          }}
+
+    # ============================================================
+    # 9. SNAPSHOT / BACKUP VALIDATION
+    # ============================================================
+
+    # Expected variables from the snapshot playbook:
+    # snapshot_id
+    # snapshot_state
+    #
+    # Example:
+    # snapshot_id    : snap-0aceeea1a0444c5eb
+    # snapshot_state : completed
+
+    - name: Set snapshot information
+      ansible.builtin.set_fact:
+        compliance_snapshot_id: "{{ snapshot_id | default('NOT_AVAILABLE') }}"
+        compliance_snapshot_state: "{{ snapshot_state | default('NOT_AVAILABLE') }}"
+
+    - name: Determine snapshot status
+      ansible.builtin.set_fact:
+        snapshot_status: >-
+          {{
+            'PASS'
+            if compliance_snapshot_state == 'completed'
+            else 'FAIL'
+          }}
+
+    # ============================================================
+    # 10. POST-PATCH VALIDATION
+    # ============================================================
+
+    - name: Determine post-check status
+      ansible.builtin.set_fact:
+        post_check_status: >-
+          {{
+            'PASS'
+            if
+              disk_status == 'PASS'
+              and ssh_status == 'PASS'
+              and server_reachable == 'PASS'
+              and reboot_status == 'PASS'
+            else 'FAIL'
+          }}
+
+    # ============================================================
+    # 11. HEALTH CHECK
+    # ============================================================
+
+    - name: Determine overall health check
+      ansible.builtin.set_fact:
+        health_check_status: >-
+          {{
+            'PASS'
+            if
+              connectivity_status == 'PASS'
+              and disk_status == 'PASS'
+              and ssh_status == 'PASS'
+              and server_reachable == 'PASS'
+              and reboot_status == 'PASS'
+            else 'FAIL'
+          }}
+
+    # ============================================================
+    # 12. OVERALL COMPLIANCE
     # ============================================================
 
     - name: Determine overall compliance
@@ -114,70 +259,106 @@
           {{
             'COMPLIANT'
             if
-              (disk_free_gb.stdout | trim | int) >= 1
-              and
-              (not reboot_required.stat.exists)
-              and
-              (ssh_service.stdout | trim) == 'active'
-            else
-              'NON-COMPLIANT'
+              patch_operation_status == 'PASS'
+              and snapshot_status == 'PASS'
+              and post_check_status == 'PASS'
+              and health_check_status == 'PASS'
+            else 'NON-COMPLIANT'
           }}
 
     # ============================================================
-    # DISPLAY COMPLIANCE REPORT
+    # 13. RECORD REPORT END TIME
+    # ============================================================
+
+    - name: Record compliance report end time
+      ansible.builtin.set_fact:
+        compliance_report_end: "{{ lookup('pipe', 'date +%H:%M:%S') }}"
+
+    # ============================================================
+    # 14. DISPLAY COMPLIANCE REPORT
     # ============================================================
 
     - name: Display Linux Patch Compliance Report
       ansible.builtin.debug:
         msg:
-          - "=================================================="
-          - "           LINUX PATCH COMPLIANCE REPORT"
-          - "=================================================="
-          - "Server Name       : {{ hostname_result.stdout | trim }}"
-          - "Server IP         : {{ ip_address.stdout | trim }}"
-          - "Operating System  : {{ ubuntu_version.stdout | trim }}"
-          - "Patch Date        : {{ ansible_date_time.date }}"
-          - "Patch Time        : {{ ansible_date_time.time }}"
-          - "--------------------------------------------------"
-          - "Root Disk Free    : {{ disk_free_gb.stdout | trim }} GB"
-          - "SSH Service       : {{ ssh_service.stdout | trim }}"
-          - "Reboot Required   : {{ reboot_required.stat.exists }}"
-          - "--------------------------------------------------"
-          - "PATCHES APPLIED IN THIS AWX RUN"
-          - "--------------------------------------------------"
-          - "Package | Previous Version | New Version"
-          - "--------------------------------------------------"
+          - "=============================================================="
+          - "              LINUX PATCH COMPLIANCE REPORT"
+          - "=============================================================="
+          - ""
+          - "SERVER INFORMATION"
+          - "--------------------------------------------------------------"
+          - "Server Name        : {{ hostname_result.stdout | trim }}"
+          - "Server IP          : {{ ip_address.stdout | trim }}"
+          - "Operating System   : {{ ubuntu_version.stdout | trim }}"
+          - "Kernel             : {{ kernel_version.stdout | trim }}"
+          - "Patch Date         : {{ ansible_date_time.date }}"
+          - "Patch Start        : {{ compliance_report_start }}"
+          - "Patch End          : {{ compliance_report_end }}"
+          - ""
+          - "--------------------------------------------------------------"
+          - "BACKUP / SNAPSHOT"
+          - "--------------------------------------------------------------"
+          - "Snapshot ID        : {{ compliance_snapshot_id }}"
+          - "Snapshot State     : {{ compliance_snapshot_state }}"
+          - "Snapshot Status    : {{ snapshot_status }}"
+          - ""
+          - "--------------------------------------------------------------"
+          - "PATCH ACTIVITY"
+          - "--------------------------------------------------------------"
+          - "Package                  Previous Version          New Version"
+          - "--------------------------------------------------------------"
           - "{{ patch_activity_text }}"
-          - "--------------------------------------------------"
-          - "Total Packages Updated : {{ package_count.stdout | trim }}"
-          - "--------------------------------------------------"
-          - "OVERALL COMPLIANCE: {{ compliance_status }}"
-          - "=================================================="
+          - ""
+          - "Total Packages Changed : {{ package_count.stdout | trim }}"
+          - ""
+          - "--------------------------------------------------------------"
+          - "POST-PATCH VALIDATION"
+          - "--------------------------------------------------------------"
+          - "Connectivity       : {{ connectivity_status }}"
+          - "SSH Service        : {{ ssh_service.stdout | trim }}"
+          - "Root Disk Free     : {{ disk_free_gb.stdout | trim }} GB"
+          - "Minimum Required   : {{ minimum_disk_gb }} GB"
+          - "Reboot Required    : {{ reboot_required.stat.exists }}"
+          - "Server Reachable   : {{ server_reachable }}"
+          - ""
+          - "--------------------------------------------------------------"
+          - "COMPLIANCE"
+          - "--------------------------------------------------------------"
+          - "Patch Operation    : {{ patch_operation_status }}"
+          - "Snapshot           : {{ snapshot_status }}"
+          - "Post Check         : {{ post_check_status }}"
+          - "Health Check       : {{ health_check_status }}"
+          - ""
+          - "=============================================================="
+          - "OVERALL COMPLIANCE : {{ compliance_status }}"
+          - "=============================================================="
 
     # ============================================================
-    # FAIL IF NON-COMPLIANT
+    # 15. FAIL JOB IF NON-COMPLIANT
     # ============================================================
 
     - name: Fail if server is non-compliant
       ansible.builtin.fail:
         msg: >-
-          Linux patch compliance check FAILED for
+          Linux patch compliance FAILED for
           {{ hostname_result.stdout | trim }}.
           Overall Compliance: {{ compliance_status }}
-      when: compliance_status != "COMPLIANT"
+      when: compliance_status != 'COMPLIANT'
 
     # ============================================================
-    # SUCCESS
+    # 16. SUCCESS MESSAGE
     # ============================================================
 
     - name: Compliance report completed successfully
       ansible.builtin.debug:
         msg:
-          - "=================================================="
+          - "=============================================================="
           - "LINUX PATCH COMPLIANCE: COMPLIANT"
-          - "=================================================="
-          - "Server: {{ hostname_result.stdout | trim }}"
-          - "Packages Updated: {{ package_count.stdout | trim }}"
+          - "=============================================================="
+          - "Server              : {{ hostname_result.stdout | trim }}"
+          - "Packages Changed    : {{ package_count.stdout | trim }}"
+          - "Snapshot Status     : {{ snapshot_status }}"
+          - "Post Check          : {{ post_check_status }}"
+          - "Health Check        : {{ health_check_status }}"
           - "Patch validation completed successfully."
-          - "Server is ready for production workloads."
-          - "=================================================="
+          - "=============================================================="
