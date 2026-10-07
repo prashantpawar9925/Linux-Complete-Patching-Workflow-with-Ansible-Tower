@@ -6,10 +6,34 @@
 
   tasks:
 
+    # ============================================================
+    # 1. Capture installed package versions BEFORE patching
+    # ============================================================
+
+    - name: Capture package versions before patching
+      ansible.builtin.shell: |
+        dpkg-query -W -f='${binary:Package}\t${Version}\n' | sort
+      register: packages_before
+      changed_when: false
+
+    - name: Save package baseline
+      ansible.builtin.copy:
+        content: "{{ packages_before.stdout }}\n"
+        dest: /var/tmp/awx_packages_before.txt
+        mode: '0600'
+
+    # ============================================================
+    # 2. Update APT repository information
+    # ============================================================
+
     - name: Update APT cache
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
+
+    # ============================================================
+    # 3. Upgrade installed packages
+    # ============================================================
 
     - name: Upgrade installed packages
       ansible.builtin.apt:
@@ -17,10 +41,76 @@
         state: present
       register: patch_result
 
+    # ============================================================
+    # 4. Capture installed package versions AFTER patching
+    # ============================================================
+
+    - name: Capture package versions after patching
+      ansible.builtin.shell: |
+        dpkg-query -W -f='${binary:Package}\t${Version}\n' | sort
+      register: packages_after
+      changed_when: false
+
+    - name: Save package state after patching
+      ansible.builtin.copy:
+        content: "{{ packages_after.stdout }}\n"
+        dest: /var/tmp/awx_packages_after.txt
+        mode: '0600'
+
+    # ============================================================
+    # 5. Determine package changes
+    # ============================================================
+
+    - name: Generate patch activity report
+      ansible.builtin.shell: |
+        awk -F '\t' '
+        NR==FNR {
+          before[$1]=$2
+          next
+        }
+
+        ($1 in before && before[$1] != $2) {
+          print $1 "\t" before[$1] "\t" $2
+        }
+
+        !($1 in before) {
+          print $1 "\tNOT_INSTALLED\t" $2
+        }
+        ' /var/tmp/awx_packages_before.txt \
+          /var/tmp/awx_packages_after.txt \
+          > /var/tmp/awx_patch_activity.txt
+      changed_when: false
+
+    # ============================================================
+    # 6. Read patch activity
+    # ============================================================
+
+    - name: Read patch activity
+      ansible.builtin.slurp:
+        src: /var/tmp/awx_patch_activity.txt
+      register: patch_activity_file
+
+    - name: Display packages changed during this patch run
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "PATCH ACTIVITY - CURRENT AWX RUN"
+          - "=========================================="
+          - "{{ patch_activity_file.content | b64decode }}"
+          - "=========================================="
+
+    # ============================================================
+    # 7. Check if reboot is required
+    # ============================================================
+
     - name: Check if reboot is required
       ansible.builtin.stat:
         path: /var/run/reboot-required
       register: reboot_required
+
+    # ============================================================
+    # 8. Display patch result
+    # ============================================================
 
     - name: Display patch result
       ansible.builtin.debug:
@@ -32,6 +122,10 @@
           - "Reboot required: {{ reboot_required.stat.exists }}"
           - "=========================================="
 
+    # ============================================================
+    # 9. Reboot Ubuntu server if required
+    # ============================================================
+
     - name: Reboot Ubuntu server if required
       ansible.builtin.reboot:
         reboot_timeout: 1800
@@ -39,6 +133,10 @@
         test_command: uptime
       when: reboot_required.stat.exists
       register: reboot_result
+
+    # ============================================================
+    # 10. Display reboot result
+    # ============================================================
 
     - name: Display reboot result
       ansible.builtin.debug:
@@ -51,6 +149,10 @@
           - "=========================================="
       when: reboot_required.stat.exists
 
+    # ============================================================
+    # 11. Patch completed
+    # ============================================================
+
     - name: Patch process completed successfully
       ansible.builtin.debug:
         msg:
@@ -58,6 +160,8 @@
           - "UBUNTU PATCH COMPLETED"
           - "=========================================="
           - "Package upgrade completed."
+          - "Package changes captured."
           - "Reboot handling completed."
           - "Server is ready for post-patch validation."
           - "=========================================="
+          
