@@ -146,33 +146,51 @@
     - name: Check whether patch activity file exists
       ansible.builtin.stat:
         path: /var/tmp/awx_patch_activity.txt
-      register: patch_activity_file
+      register: patch_activity_file_stat
 
     - name: Read patch activity file
       ansible.builtin.slurp:
         src: /var/tmp/awx_patch_activity.txt
-      register: patch_activity
-      when: patch_activity_file.stat.exists
+      register: patch_activity_raw
+      when: patch_activity_file_stat.stat.exists
 
     - name: Set patch activity content
       ansible.builtin.set_fact:
-        patch_activity_text: >-
+        patch_activity_content: >-
           {{
-            patch_activity.content | b64decode
-            if patch_activity_file.stat.exists
-            else
-            'No patch activity recorded.'
+            patch_activity_raw.content | b64decode
+            if patch_activity_file_stat.stat.exists
+            else ''
           }}
 
     - name: Count packages changed
-      ansible.builtin.shell: |
-        if [ -s /var/tmp/awx_patch_activity.txt ]; then
-          wc -l < /var/tmp/awx_patch_activity.txt
-        else
-          echo "0"
-        fi
-      register: package_count
-      changed_when: false
+      ansible.builtin.set_fact:
+        packages_changed: >-
+          {{
+            patch_activity_content.splitlines()
+            | reject('equalto', '')
+            | list
+            | length
+          }}
+
+    - name: Determine patch activity status
+      ansible.builtin.set_fact:
+        patch_activity_status: >-
+          {{
+            'PASS'
+            if packages_changed | int > 0
+            else 'PASS - NO PACKAGE CHANGES'
+          }}
+
+    - name: Display patch activity
+      ansible.builtin.debug:
+        msg:
+          - "=============================================="
+          - "PATCH ACTIVITY"
+          - "=============================================="
+          - "{{ patch_activity_content | default('No package changes detected.') }}"
+          - "Total Packages Changed : {{ packages_changed }}"
+          - "Patch Activity Status   : {{ patch_activity_status }}"
 
     # ============================================================
     # 8. PATCH OPERATION VALIDATION
