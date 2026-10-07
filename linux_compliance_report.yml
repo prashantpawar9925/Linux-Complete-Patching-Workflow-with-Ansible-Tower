@@ -1,3 +1,4 @@
+
 ---
 - name: Generate Linux Patch Compliance Report
   hosts: Ubuntu-Server
@@ -5,6 +6,10 @@
   gather_facts: true
 
   tasks:
+
+    # ============================================================
+    # SERVER INFORMATION
+    # ============================================================
 
     - name: Get hostname
       ansible.builtin.command: hostname
@@ -26,6 +31,10 @@
       register: uptime_result
       changed_when: false
 
+    # ============================================================
+    # DISK CHECK
+    # ============================================================
+
     - name: Check root filesystem
       ansible.builtin.command: df -h /
       register: disk_result
@@ -37,10 +46,18 @@
       register: disk_free_gb
       changed_when: false
 
+    # ============================================================
+    # REBOOT CHECK
+    # ============================================================
+
     - name: Check if reboot is required
       ansible.builtin.stat:
         path: /var/run/reboot-required
       register: reboot_required
+
+    # ============================================================
+    # SSH SERVICE CHECK
+    # ============================================================
 
     - name: Check SSH service
       ansible.builtin.command: systemctl is-active ssh
@@ -48,37 +65,48 @@
       changed_when: false
       failed_when: false
 
-    - name: Get latest APT package activity
+    # ============================================================
+    # READ PATCH ACTIVITY FROM CURRENT AWX PATCH RUN
+    # ============================================================
+
+    - name: Check if AWX patch activity file exists
+      ansible.builtin.stat:
+        path: /var/tmp/awx_patch_activity.txt
+      register: patch_activity_file
+
+    - name: Read AWX patch activity
+      ansible.builtin.slurp:
+        src: /var/tmp/awx_patch_activity.txt
+      register: patch_activity
+      when: patch_activity_file.stat.exists
+
+    - name: Set patch activity content
+      ansible.builtin.set_fact:
+        patch_activity_text: >-
+          {{
+            patch_activity.content | b64decode
+            if patch_activity_file.stat.exists
+            else
+            'No patch activity file found.'
+          }}
+
+    # ============================================================
+    # COUNT PATCHES
+    # ============================================================
+
+    - name: Count packages updated
       ansible.builtin.shell: |
-        if [ -f /var/log/apt/history.log ]; then
-          awk '
-            /Start-Date:/ {
-              block=$0
-            }
-            /Commandline:/ {
-              block=block "\n" $0
-            }
-            /Upgrade:/ {
-              block=block "\n" $0
-            }
-            /Install:/ {
-              block=block "\n" $0
-            }
-            /Remove:/ {
-              block=block "\n" $0
-            }
-            /End-Date:/ {
-              block=block "\n" $0
-              print block
-              block=""
-            }
-          ' /var/log/apt/history.log | tail -50
+        if [ -s /var/tmp/awx_patch_activity.txt ]; then
+          wc -l < /var/tmp/awx_patch_activity.txt
         else
-          echo "No APT history file found."
+          echo "0"
         fi
-      register: package_history
+      register: package_count
       changed_when: false
-      failed_when: false
+
+    # ============================================================
+    # DETERMINE COMPLIANCE
+    # ============================================================
 
     - name: Determine overall compliance
       ansible.builtin.set_fact:
@@ -94,6 +122,10 @@
             else
               'NON-COMPLIANT'
           }}
+
+    # ============================================================
+    # DISPLAY COMPLIANCE REPORT
+    # ============================================================
 
     - name: Display Linux Patch Compliance Report
       ansible.builtin.debug:
@@ -111,12 +143,20 @@
           - "SSH Service       : {{ ssh_service.stdout | trim }}"
           - "Reboot Required   : {{ reboot_required.stat.exists }}"
           - "--------------------------------------------------"
-          - "RECENT PATCH ACTIVITY"
+          - "PATCHES APPLIED IN THIS AWX RUN"
           - "--------------------------------------------------"
-          - "{{ package_history.stdout | default('No package history available') }}"
+          - "Package | Previous Version | New Version"
+          - "--------------------------------------------------"
+          - "{{ patch_activity_text }}"
+          - "--------------------------------------------------"
+          - "Total Packages Updated : {{ package_count.stdout | trim }}"
           - "--------------------------------------------------"
           - "OVERALL COMPLIANCE: {{ compliance_status }}"
           - "=================================================="
+
+    # ============================================================
+    # FAIL IF NON-COMPLIANT
+    # ============================================================
 
     - name: Fail if server is non-compliant
       ansible.builtin.fail:
@@ -126,6 +166,10 @@
           Overall Compliance: {{ compliance_status }}
       when: compliance_status != "COMPLIANT"
 
+    # ============================================================
+    # SUCCESS
+    # ============================================================
+
     - name: Compliance report completed successfully
       ansible.builtin.debug:
         msg:
@@ -133,7 +177,7 @@
           - "LINUX PATCH COMPLIANCE: COMPLIANT"
           - "=================================================="
           - "Server: {{ hostname_result.stdout | trim }}"
+          - "Packages Updated: {{ package_count.stdout | trim }}"
           - "Patch validation completed successfully."
           - "Server is ready for production workloads."
           - "=================================================="
-          
