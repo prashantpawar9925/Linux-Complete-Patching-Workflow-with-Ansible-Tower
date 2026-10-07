@@ -51,9 +51,7 @@
     - name: Fail if root EBS volume was not found
       ansible.builtin.fail:
         msg: "Could not determine root EBS volume for {{ ansible_host }}"
-      when:
-        - root_volume_id is not defined
-        - root_volume_id | length == 0
+      when: root_volume_id is not defined or (root_volume_id | length == 0)
 
     - name: Display root EBS volume
       ansible.builtin.debug:
@@ -80,67 +78,108 @@
       register: snapshot_result
 
     # ============================================================
-    # 4. VALIDATE SNAPSHOT
+    # 4. DISPLAY CREATED SNAPSHOT ID
     # ============================================================
+
+    - name: Display created snapshot ID
+      ansible.builtin.debug:
+        msg:
+          - "Snapshot created."
+          - "Snapshot ID: {{ snapshot_result.snapshot_id }}"
+
+    # ============================================================
+    # 5. QUERY AWS FOR ACTUAL SNAPSHOT STATE
+    # ============================================================
+
+    - name: Get snapshot information from AWS
+      amazon.aws.ec2_snapshot_info:
+        region: ap-south-1
+        snapshot_ids:
+          - "{{ snapshot_result.snapshot_id }}"
+      delegate_to: localhost
+      register: snapshot_info
+
+    # ============================================================
+    # 6. VALIDATE SNAPSHOT INFORMATION
+    # ============================================================
+
+    - name: Fail if snapshot information was not returned
+      ansible.builtin.fail:
+        msg: >-
+          AWS did not return information for snapshot
+          {{ snapshot_result.snapshot_id }}.
+      when:
+        - snapshot_info.snapshots is not defined
+          or snapshot_info.snapshots | length == 0
+
+    - name: Set snapshot state
+      ansible.builtin.set_fact:
+        snapshot_state: "{{ snapshot_info.snapshots[0].state }}"
 
     - name: Determine snapshot status
       ansible.builtin.set_fact:
         snapshot_status: >-
           {{
             'SUCCESS'
-            if (snapshot_result.state | default('')) == 'completed'
+            if snapshot_state == 'completed'
             else 'FAILED'
           }}
+
+    # ============================================================
+    # 7. DISPLAY FINAL SNAPSHOT RESULT
+    # ============================================================
 
     - name: Display snapshot information
       ansible.builtin.debug:
         msg:
-          - "=================================================="
-          - "UBUNTU EBS SNAPSHOT RESULT"
-          - "=================================================="
+          - "=============================================================="
+          - "              UBUNTU EBS SNAPSHOT RESULT"
+          - "=============================================================="
           - "Ubuntu Server IP : {{ ansible_host }}"
           - "EC2 Instance ID  : {{ ec2_instance_info.instances[0].instance_id }}"
           - "EBS Volume ID    : {{ root_volume_id }}"
           - "Snapshot ID      : {{ snapshot_result.snapshot_id }}"
-          - "Snapshot State   : {{ snapshot_result.state | default('unknown') }}"
+          - "Snapshot State   : {{ snapshot_state }}"
           - "Snapshot Status  : {{ snapshot_status }}"
-          - "=================================================="
+          - "=============================================================="
 
     # ============================================================
-    # 5. PUBLISH DATA TO AWX WORKFLOW
+    # 8. PUBLISH DATA TO AWX WORKFLOW
     # ============================================================
 
     - name: Publish snapshot information to AWX workflow
       ansible.builtin.set_stats:
         data:
           snapshot_id: "{{ snapshot_result.snapshot_id }}"
-          snapshot_state: "{{ snapshot_result.state | default('unknown') }}"
+          snapshot_state: "{{ snapshot_state }}"
           snapshot_status: "{{ snapshot_status }}"
           snapshot_volume_id: "{{ root_volume_id }}"
           snapshot_server_ip: "{{ ansible_host }}"
         aggregate: false
 
     # ============================================================
-    # 6. FAIL IF SNAPSHOT FAILED
+    # 9. FAIL IF SNAPSHOT IS NOT COMPLETED
     # ============================================================
 
     - name: Fail if snapshot was not completed
       ansible.builtin.fail:
         msg: >-
           EBS snapshot failed for {{ ansible_host }}.
-          Snapshot ID: {{ snapshot_result.snapshot_id | default('UNKNOWN') }}.
-          State: {{ snapshot_result.state | default('unknown') }}
+          Snapshot ID: {{ snapshot_result.snapshot_id }}.
+          State: {{ snapshot_state }}.
       when: snapshot_status != 'SUCCESS'
 
     # ============================================================
-    # 7. SNAPSHOT SUCCESS
+    # 10. SNAPSHOT SUCCESS
     # ============================================================
 
     - name: Snapshot completed successfully
       ansible.builtin.debug:
         msg:
-          - "=================================================="
-          - "SNAPSHOT COMPLETED SUCCESSFULLY"
+          - "=============================================================="
+          - "              SNAPSHOT COMPLETED SUCCESSFULLY"
+          - "=============================================================="
           - "Snapshot ID    : {{ snapshot_result.snapshot_id }}"
-          - "Snapshot State : {{ snapshot_result.state }}"
-          - "=================================================="
+          - "Snapshot State : {{ snapshot_state }}"
+          - "Snapshot Status: SUCCESS"
+          - "=============================================================="
