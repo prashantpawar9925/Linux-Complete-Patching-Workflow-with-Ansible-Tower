@@ -1,3 +1,4 @@
+
 ---
 - name: Generate Linux Patch Compliance Report
   hosts: Ubuntu-Server
@@ -36,6 +37,7 @@
       changed_when: false
       failed_when: false
 
+
     # ============================================================
     # 2. DISK VALIDATION
     # ============================================================
@@ -64,6 +66,7 @@
             else 'FAIL'
           }}
 
+
     # ============================================================
     # 3. CONNECTIVITY VALIDATION
     # ============================================================
@@ -82,6 +85,7 @@
             if connectivity_check.rc == 0
             else 'FAIL'
           }}
+
 
     # ============================================================
     # 4. SSH SERVICE VALIDATION
@@ -102,6 +106,7 @@
             else 'FAIL'
           }}
 
+
     # ============================================================
     # 5. REBOOT VALIDATION
     # ============================================================
@@ -119,6 +124,7 @@
             if not reboot_required.stat.exists
             else 'FAIL'
           }}
+
 
     # ============================================================
     # 6. SERVER REACHABILITY
@@ -138,6 +144,7 @@
             if reachability_check.rc == 0
             else 'FAIL'
           }}
+
 
     # ============================================================
     # 7. PATCH ACTIVITY
@@ -178,8 +185,8 @@
         patch_activity_status: >-
           {{
             'PASS'
-            if packages_changed | int > 0
-            else 'PASS - NO PACKAGE CHANGES'
+            if patch_activity_file_stat.stat.exists
+            else 'FAIL'
           }}
 
     - name: Display patch activity
@@ -191,6 +198,8 @@
           - "{{ patch_activity_content | default('No package changes detected.') }}"
           - "Total Packages Changed : {{ packages_changed }}"
           - "Patch Activity Status   : {{ patch_activity_status }}"
+          - "=============================================="
+
 
     # ============================================================
     # 8. PATCH OPERATION VALIDATION
@@ -201,36 +210,32 @@
         patch_operation_status: >-
           {{
             'PASS'
-            if patch_activity_file.stat.exists
-            and (package_count.stdout | trim | int) >= 0
+            if patch_activity_status == 'PASS'
             else 'FAIL'
           }}
+
 
     # ============================================================
     # 9. SNAPSHOT / BACKUP VALIDATION
     # ============================================================
 
-    # Expected variables from the snapshot playbook:
-    # snapshot_id
-    # snapshot_state
-    #
-    # Example:
-    # snapshot_id    : snap-0aceeea1a0444c5eb
-    # snapshot_state : completed
-
     - name: Set snapshot information
       ansible.builtin.set_fact:
         compliance_snapshot_id: "{{ snapshot_id | default('NOT_AVAILABLE') }}"
         compliance_snapshot_state: "{{ snapshot_state | default('NOT_AVAILABLE') }}"
+        compliance_snapshot_status: "{{ snapshot_status | default('NOT_AVAILABLE') }}"
 
     - name: Determine snapshot status
       ansible.builtin.set_fact:
-        snapshot_status: >-
+        final_snapshot_status: >-
           {{
             'PASS'
-            if compliance_snapshot_state == 'completed'
+            if
+              compliance_snapshot_state == 'completed'
+              and compliance_snapshot_status == 'SUCCESS'
             else 'FAIL'
           }}
+
 
     # ============================================================
     # 10. POST-PATCH VALIDATION
@@ -248,6 +253,7 @@
               and reboot_status == 'PASS'
             else 'FAIL'
           }}
+
 
     # ============================================================
     # 11. HEALTH CHECK
@@ -267,6 +273,7 @@
             else 'FAIL'
           }}
 
+
     # ============================================================
     # 12. OVERALL COMPLIANCE
     # ============================================================
@@ -278,11 +285,12 @@
             'COMPLIANT'
             if
               patch_operation_status == 'PASS'
-              and snapshot_status == 'PASS'
+              and final_snapshot_status == 'PASS'
               and post_check_status == 'PASS'
               and health_check_status == 'PASS'
             else 'NON-COMPLIANT'
           }}
+
 
     # ============================================================
     # 13. RECORD REPORT END TIME
@@ -291,6 +299,7 @@
     - name: Record compliance report end time
       ansible.builtin.set_fact:
         compliance_report_end: "{{ lookup('pipe', 'date +%H:%M:%S') }}"
+
 
     # ============================================================
     # 14. DISPLAY COMPLIANCE REPORT
@@ -318,16 +327,17 @@
           - "--------------------------------------------------------------"
           - "Snapshot ID        : {{ compliance_snapshot_id }}"
           - "Snapshot State     : {{ compliance_snapshot_state }}"
-          - "Snapshot Status    : {{ snapshot_status }}"
+          - "Snapshot Status    : {{ final_snapshot_status }}"
           - ""
           - "--------------------------------------------------------------"
           - "PATCH ACTIVITY"
           - "--------------------------------------------------------------"
           - "Package                  Previous Version          New Version"
           - "--------------------------------------------------------------"
-          - "{{ patch_activity_text }}"
+          - "{{ patch_activity_content | default('No package changes detected.') }}"
           - ""
-          - "Total Packages Changed : {{ package_count.stdout | trim }}"
+          - "Total Packages Changed : {{ packages_changed }}"
+          - "Patch Activity Status  : {{ patch_activity_status }}"
           - ""
           - "--------------------------------------------------------------"
           - "POST-PATCH VALIDATION"
@@ -343,13 +353,14 @@
           - "COMPLIANCE"
           - "--------------------------------------------------------------"
           - "Patch Operation    : {{ patch_operation_status }}"
-          - "Snapshot           : {{ snapshot_status }}"
+          - "Snapshot           : {{ final_snapshot_status }}"
           - "Post Check         : {{ post_check_status }}"
           - "Health Check       : {{ health_check_status }}"
           - ""
           - "=============================================================="
           - "OVERALL COMPLIANCE : {{ compliance_status }}"
           - "=============================================================="
+
 
     # ============================================================
     # 15. FAIL JOB IF NON-COMPLIANT
@@ -363,6 +374,7 @@
           Overall Compliance: {{ compliance_status }}
       when: compliance_status != 'COMPLIANT'
 
+
     # ============================================================
     # 16. SUCCESS MESSAGE
     # ============================================================
@@ -374,8 +386,8 @@
           - "LINUX PATCH COMPLIANCE: COMPLIANT"
           - "=============================================================="
           - "Server              : {{ hostname_result.stdout | trim }}"
-          - "Packages Changed    : {{ package_count.stdout | trim }}"
-          - "Snapshot Status     : {{ snapshot_status }}"
+          - "Packages Changed    : {{ packages_changed }}"
+          - "Snapshot Status     : {{ final_snapshot_status }}"
           - "Post Check          : {{ post_check_status }}"
           - "Health Check        : {{ health_check_status }}"
           - "Patch validation completed successfully."
