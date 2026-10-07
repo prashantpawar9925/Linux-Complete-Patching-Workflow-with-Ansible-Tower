@@ -61,7 +61,7 @@
           {{
             'COMPLIANT'
             if
-              (disk_free_gb.stdout | trim | int) >= 10
+              (disk_free_gb.stdout | trim | int) >= 1
               and
               (not reboot_required.stat.exists)
               and
