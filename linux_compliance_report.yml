@@ -1,0 +1,112 @@
+---
+- name: Generate Linux Patch Compliance Report
+  hosts: Ubuntu-Server
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Get hostname
+      ansible.builtin.command: hostname
+      register: hostname_result
+      changed_when: false
+
+    - name: Get Ubuntu version
+      ansible.builtin.command: lsb_release -ds
+      register: ubuntu_version
+      changed_when: false
+
+    - name: Get server IP address
+      ansible.builtin.command: hostname -I
+      register: ip_address
+      changed_when: false
+
+    - name: Get uptime
+      ansible.builtin.command: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: Check root filesystem
+      ansible.builtin.command: df -h /
+      register: disk_result
+      changed_when: false
+
+    - name: Check root filesystem free space
+      ansible.builtin.shell: |
+        df --output=avail / | tail -1 | awk '{print int($1/1024/1024)}'
+      register: disk_free_gb
+      changed_when: false
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Check SSH service
+      ansible.builtin.command: systemctl is-active ssh
+      register: ssh_service
+      changed_when: false
+      failed_when: false
+
+    - name: Get recently installed packages
+      ansible.builtin.shell: |
+        grep " upgrade " /var/log/apt/history.log 2>/dev/null | tail -20
+      register: package_history
+      changed_when: false
+      failed_when: false
+
+    - name: Determine overall compliance
+      ansible.builtin.set_fact:
+        compliance_status: >-
+          {{
+            'COMPLIANT'
+            if
+              (disk_free_gb.stdout | trim | int) >= 10
+              and
+              (not reboot_required.stat.exists)
+              and
+              (ssh_service.stdout | trim) == 'active'
+            else
+              'NON-COMPLIANT'
+          }}
+
+    - name: Display Linux Patch Compliance Report
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "           LINUX PATCH COMPLIANCE REPORT"
+          - "=================================================="
+          - "Server Name       : {{ hostname_result.stdout | trim }}"
+          - "Server IP         : {{ ip_address.stdout | trim }}"
+          - "Operating System  : {{ ubuntu_version.stdout | trim }}"
+          - "Patch Date        : {{ ansible_date_time.date }}"
+          - "Patch Time        : {{ ansible_date_time.time }}"
+          - "--------------------------------------------------"
+          - "Root Disk Free    : {{ disk_free_gb.stdout | trim }} GB"
+          - "SSH Service       : {{ ssh_service.stdout | trim }}"
+          - "Reboot Required   : {{ reboot_required.stat.exists }}"
+          - "--------------------------------------------------"
+          - "Recent Package Activity:"
+          - "{{ package_history.stdout | default('No package history available') }}"
+          - "--------------------------------------------------"
+          - "OVERALL COMPLIANCE: {{ compliance_status }}"
+          - "=================================================="
+
+    - name: Fail if server is non-compliant
+      ansible.builtin.fail:
+        msg: >-
+          Linux patch compliance check FAILED for
+          {{ hostname_result.stdout | trim }}.
+          Overall Compliance: {{ compliance_status }}
+      when: compliance_status != "COMPLIANT"
+
+    - name: Compliance report completed successfully
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "LINUX PATCH COMPLIANCE: COMPLIANT"
+          - "=================================================="
+          - "Server: {{ hostname_result.stdout | trim }}"
+          - "Patch validation completed successfully."
+          - "Server is ready for production workloads."
+          - "=================================================="
