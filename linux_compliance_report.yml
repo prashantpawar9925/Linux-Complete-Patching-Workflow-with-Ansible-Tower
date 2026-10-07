@@ -48,9 +48,34 @@
       changed_when: false
       failed_when: false
 
-    - name: Get recently installed packages
+    - name: Get latest APT package activity
       ansible.builtin.shell: |
-        grep " upgrade " /var/log/apt/history.log 2>/dev/null | tail -20
+        if [ -f /var/log/apt/history.log ]; then
+          awk '
+            /Start-Date:/ {
+              block=$0
+            }
+            /Commandline:/ {
+              block=block "\n" $0
+            }
+            /Upgrade:/ {
+              block=block "\n" $0
+            }
+            /Install:/ {
+              block=block "\n" $0
+            }
+            /Remove:/ {
+              block=block "\n" $0
+            }
+            /End-Date:/ {
+              block=block "\n" $0
+              print block
+              block=""
+            }
+          ' /var/log/apt/history.log | tail -50
+        else
+          echo "No APT history file found."
+        fi
       register: package_history
       changed_when: false
       failed_when: false
@@ -86,7 +111,8 @@
           - "SSH Service       : {{ ssh_service.stdout | trim }}"
           - "Reboot Required   : {{ reboot_required.stat.exists }}"
           - "--------------------------------------------------"
-          - "Recent Package Activity:"
+          - "RECENT PATCH ACTIVITY"
+          - "--------------------------------------------------"
           - "{{ package_history.stdout | default('No package history available') }}"
           - "--------------------------------------------------"
           - "OVERALL COMPLIANCE: {{ compliance_status }}"
@@ -110,3 +136,4 @@
           - "Patch validation completed successfully."
           - "Server is ready for production workloads."
           - "=================================================="
+          
