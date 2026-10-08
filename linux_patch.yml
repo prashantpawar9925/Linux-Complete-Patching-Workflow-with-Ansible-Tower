@@ -84,8 +84,8 @@
         !($1 in before) {
           print $1 "\tNOT_INSTALLED\t" $2
         }
-        ' /var/tmp/awx_packages_before.txt 
-          /var/tmp/awx_packages_after.txt 
+        ' /var/tmp/awx_packages_before.txt \
+          /var/tmp/awx_packages_after.txt \
           > /var/tmp/awx_patch_activity.txt
       changed_when: false
 
