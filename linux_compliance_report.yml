@@ -221,6 +221,7 @@
           }}
 
 
+    
     # ============================================================
     # 9. READ LATEST SUCCESSFUL PATCH METADATA
     # ============================================================
@@ -236,7 +237,7 @@
       register: last_patch_metadata_raw
       when: last_patch_metadata_stat.stat.exists
 
-    - name: Set latest successful patch metadata
+    - name: Set latest successful patch metadata content
       ansible.builtin.set_fact:
         last_patch_metadata_content: >-
           {{
@@ -245,35 +246,60 @@
             else ''
           }}
 
+    # ============================================================
+    # 9A. SET SAFE DEFAULT VALUES
+    # ============================================================
+
+    - name: Set latest successful patch defaults
+      ansible.builtin.set_fact:
+        last_patch_start_time: "NOT_AVAILABLE"
+        last_patch_end_time: "NOT_AVAILABLE"
+        last_patch_package_count: "0"
+
+    # ============================================================
+    # 9B. EXTRACT PATCH START TIME
+    # ============================================================
+
     - name: Extract latest successful patch start time
       ansible.builtin.set_fact:
         last_patch_start_time: >-
           {{
-            last_patch_metadata_content
-            | regex_search('PATCH_START_TIME=(.*)', '\\1')
-            | first
-            | default('NOT_AVAILABLE')
+            item.split('=', 1)[1] | trim
           }}
+      loop: "{{ last_patch_metadata_content.splitlines() }}"
+      when:
+        - last_patch_metadata_stat.stat.exists
+        - item.startswith('PATCH_START_TIME=')
+
+    # ============================================================
+    # 9C. EXTRACT PATCH END TIME
+    # ============================================================
 
     - name: Extract latest successful patch end time
       ansible.builtin.set_fact:
         last_patch_end_time: >-
           {{
-            last_patch_metadata_content
-            | regex_search('PATCH_END_TIME=(.*)', '\\1')
-            | first
-            | default('NOT_AVAILABLE')
+            item.split('=', 1)[1] | trim
           }}
+      loop: "{{ last_patch_metadata_content.splitlines() }}"
+      when:
+        - last_patch_metadata_stat.stat.exists
+        - item.startswith('PATCH_END_TIME=')
+
+    # ============================================================
+    # 9D. EXTRACT PACKAGE COUNT
+    # ============================================================
 
     - name: Extract latest successful package count
       ansible.builtin.set_fact:
         last_patch_package_count: >-
           {{
-            last_patch_metadata_content
-            | regex_search('PACKAGES_CHANGED=(.*)', '\\1')
-            | first
-            | default(last_packages_changed | string)
+            item.split('=', 1)[1] | trim
           }}
+      loop: "{{ last_patch_metadata_content.splitlines() }}"
+      when:
+        - last_patch_metadata_stat.stat.exists
+        - item.startswith('PACKAGES_CHANGED=')
 
 
     # ============================================================
