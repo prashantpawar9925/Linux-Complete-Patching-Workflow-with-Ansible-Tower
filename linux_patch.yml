@@ -1,3 +1,4 @@
+
 ---
 - name: Patch Ubuntu Server
   hosts: Ubuntu-Server
@@ -53,7 +54,7 @@
     # 5. CAPTURE INSTALLED PACKAGE VERSIONS AFTER PATCHING
     # ============================================================
 
-    - name: Capture package versions after patching
+    - name: Capture installed package versions after patching
       ansible.builtin.shell: |
         dpkg-query -W -f='${binary:Package}\t${Version}\n' | sort
       register: packages_after
@@ -126,6 +127,18 @@
           - "=================================================="
 
     # ============================================================
+    # 8A. PRESERVE LAST SUCCESSFUL PATCH ACTIVITY
+    # ============================================================
+
+    - name: Preserve latest successful patch activity
+      ansible.builtin.copy:
+        src: /var/tmp/awx_patch_activity.txt
+        dest: /var/tmp/awx_last_patch_activity.txt
+        remote_src: true
+        mode: '0600'
+      when: (package_count.stdout | trim | int) > 0
+
+    # ============================================================
     # 9. DETERMINE PATCH OPERATION STATUS
     # ============================================================
 
@@ -175,6 +188,23 @@
     - name: Record patch end time
       ansible.builtin.set_fact:
         patch_end_time: "{{ lookup('pipe', 'date +%H:%M:%S') }}"
+
+    # ============================================================
+    # 13A. SAVE LAST SUCCESSFUL PATCH METADATA
+    # ============================================================
+
+    - name: Save latest successful patch metadata
+      ansible.builtin.copy:
+        content: |
+          PATCH_START_TIME={{ patch_start_time }}
+          PATCH_END_TIME={{ patch_end_time }}
+          PACKAGES_CHANGED={{ package_count.stdout | trim }}
+        dest: /var/tmp/awx_last_patch_metadata.txt
+        mode: '0600'
+      when:
+        - (package_count.stdout | trim | int) > 0
+        - patch_operation_status == 'PASS'
+        - not reboot_required_after.stat.exists
 
     # ============================================================
     # 14. DISPLAY PATCH RESULT
