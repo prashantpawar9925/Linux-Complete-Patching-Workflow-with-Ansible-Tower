@@ -11,10 +11,6 @@
     # 1. SERVER INFORMATION
     # ============================================================
 
-    - name: Record compliance report start time
-      ansible.builtin.set_fact:
-        compliance_report_start: "{{ lookup('pipe', 'date +%H:%M:%S') }}"
-
     - name: Get server hostname
       ansible.builtin.command: hostname
       register: hostname_result
@@ -147,62 +143,141 @@
 
 
     # ============================================================
-    # 7. PATCH ACTIVITY
+    # 7. CURRENT PATCH RUN
     # ============================================================
 
-    - name: Check whether patch activity file exists
+    - name: Check current patch activity file
       ansible.builtin.stat:
         path: /var/tmp/awx_patch_activity.txt
-      register: patch_activity_file_stat
+      register: current_patch_activity_stat
 
-    - name: Read patch activity file
+    - name: Read current patch activity
       ansible.builtin.slurp:
         src: /var/tmp/awx_patch_activity.txt
-      register: patch_activity_raw
-      when: patch_activity_file_stat.stat.exists
+      register: current_patch_activity_raw
+      when: current_patch_activity_stat.stat.exists
 
-    - name: Set patch activity content
+    - name: Set current patch activity content
       ansible.builtin.set_fact:
-        patch_activity_content: >-
+        current_patch_activity_content: >-
           {{
-            patch_activity_raw.content | b64decode
-            if patch_activity_file_stat.stat.exists
+            current_patch_activity_raw.content | b64decode
+            if current_patch_activity_stat.stat.exists
             else ''
           }}
 
-    - name: Count packages changed
+    - name: Count current packages changed
       ansible.builtin.set_fact:
-        packages_changed: >-
+        current_packages_changed: >-
           {{
-            patch_activity_content.splitlines()
+            current_patch_activity_content.splitlines()
             | reject('equalto', '')
             | list
             | length
           }}
 
-    - name: Determine patch activity status
+    - name: Determine current patch activity status
       ansible.builtin.set_fact:
-        patch_activity_status: >-
+        current_patch_activity_status: >-
           {{
             'PASS'
-            if patch_activity_file_stat.stat.exists
+            if current_patch_activity_stat.stat.exists
             else 'FAIL'
           }}
 
-    - name: Display patch activity
-      ansible.builtin.debug:
-        msg:
-          - "=============================================="
-          - "PATCH ACTIVITY"
-          - "=============================================="
-          - "{{ patch_activity_content | default('No package changes detected.') }}"
-          - "Total Packages Changed : {{ packages_changed }}"
-          - "Patch Activity Status   : {{ patch_activity_status }}"
-          - "=============================================="
+
+    # ============================================================
+    # 8. LATEST SUCCESSFUL PATCH
+    # ============================================================
+
+    - name: Check latest successful patch activity
+      ansible.builtin.stat:
+        path: /var/tmp/awx_last_patch_activity.txt
+      register: last_patch_activity_stat
+
+    - name: Read latest successful patch activity
+      ansible.builtin.slurp:
+        src: /var/tmp/awx_last_patch_activity.txt
+      register: last_patch_activity_raw
+      when: last_patch_activity_stat.stat.exists
+
+    - name: Set latest successful patch activity content
+      ansible.builtin.set_fact:
+        last_patch_activity_content: >-
+          {{
+            last_patch_activity_raw.content | b64decode
+            if last_patch_activity_stat.stat.exists
+            else ''
+          }}
+
+    - name: Count latest successful packages changed
+      ansible.builtin.set_fact:
+        last_packages_changed: >-
+          {{
+            last_patch_activity_content.splitlines()
+            | reject('equalto', '')
+            | list
+            | length
+          }}
 
 
     # ============================================================
-    # 8. PATCH OPERATION VALIDATION
+    # 9. READ LATEST SUCCESSFUL PATCH METADATA
+    # ============================================================
+
+    - name: Check latest successful patch metadata
+      ansible.builtin.stat:
+        path: /var/tmp/awx_last_patch_metadata.txt
+      register: last_patch_metadata_stat
+
+    - name: Read latest successful patch metadata
+      ansible.builtin.slurp:
+        src: /var/tmp/awx_last_patch_metadata.txt
+      register: last_patch_metadata_raw
+      when: last_patch_metadata_stat.stat.exists
+
+    - name: Set latest successful patch metadata
+      ansible.builtin.set_fact:
+        last_patch_metadata_content: >-
+          {{
+            last_patch_metadata_raw.content | b64decode
+            if last_patch_metadata_stat.stat.exists
+            else ''
+          }}
+
+    - name: Extract latest successful patch start time
+      ansible.builtin.set_fact:
+        last_patch_start_time: >-
+          {{
+            last_patch_metadata_content
+            | regex_search('PATCH_START_TIME=(.*)', '\\1')
+            | first
+            | default('NOT_AVAILABLE')
+          }}
+
+    - name: Extract latest successful patch end time
+      ansible.builtin.set_fact:
+        last_patch_end_time: >-
+          {{
+            last_patch_metadata_content
+            | regex_search('PATCH_END_TIME=(.*)', '\\1')
+            | first
+            | default('NOT_AVAILABLE')
+          }}
+
+    - name: Extract latest successful package count
+      ansible.builtin.set_fact:
+        last_patch_package_count: >-
+          {{
+            last_patch_metadata_content
+            | regex_search('PACKAGES_CHANGED=(.*)', '\\1')
+            | first
+            | default(last_packages_changed | string)
+          }}
+
+
+    # ============================================================
+    # 10. PATCH OPERATION VALIDATION
     # ============================================================
 
     - name: Determine patch operation status
@@ -210,13 +285,13 @@
         patch_operation_status: >-
           {{
             'PASS'
-            if patch_activity_status == 'PASS'
+            if current_patch_activity_status == 'PASS'
             else 'FAIL'
           }}
 
 
     # ============================================================
-    # 9. SNAPSHOT / BACKUP VALIDATION
+    # 11. SNAPSHOT / BACKUP VALIDATION
     # ============================================================
 
     - name: Set snapshot information
@@ -238,7 +313,7 @@
 
 
     # ============================================================
-    # 10. POST-PATCH VALIDATION
+    # 12. POST-PATCH VALIDATION
     # ============================================================
 
     - name: Determine post-check status
@@ -256,7 +331,7 @@
 
 
     # ============================================================
-    # 11. HEALTH CHECK
+    # 13. HEALTH CHECK
     # ============================================================
 
     - name: Determine overall health check
@@ -275,7 +350,7 @@
 
 
     # ============================================================
-    # 12. OVERALL COMPLIANCE
+    # 14. OVERALL COMPLIANCE
     # ============================================================
 
     - name: Determine overall compliance
@@ -293,16 +368,7 @@
 
 
     # ============================================================
-    # 13. RECORD REPORT END TIME
-    # ============================================================
-
-    - name: Record compliance report end time
-      ansible.builtin.set_fact:
-        compliance_report_end: "{{ lookup('pipe', 'date +%H:%M:%S') }}"
-
-
-    # ============================================================
-    # 14. DISPLAY COMPLIANCE REPORT
+    # 15. DISPLAY COMPLIANCE REPORT
     # ============================================================
 
     - name: Display Linux Patch Compliance Report
@@ -318,9 +384,27 @@
           - "Server IP          : {{ ip_address.stdout | trim }}"
           - "Operating System   : {{ ubuntu_version.stdout | trim }}"
           - "Kernel             : {{ kernel_version.stdout | trim }}"
-          - "Patch Date         : {{ ansible_date_time.date }}"
-          - "Patch Start        : {{ compliance_report_start }}"
-          - "Patch End          : {{ compliance_report_end }}"
+          - ""
+          - "--------------------------------------------------------------"
+          - "CURRENT PATCH RUN"
+          - "--------------------------------------------------------------"
+          - "Patch Operation    : {{ patch_operation_status }}"
+          - "Packages Changed   : {{ current_packages_changed }}"
+          - ""
+          - "Package                  Previous Version          New Version"
+          - "--------------------------------------------------------------"
+          - "{{ current_patch_activity_content | default('No package changes detected during this run.') }}"
+          - ""
+          - "--------------------------------------------------------------"
+          - "LATEST SUCCESSFUL PATCH"
+          - "--------------------------------------------------------------"
+          - "Patch Start        : {{ last_patch_start_time }}"
+          - "Patch End          : {{ last_patch_end_time }}"
+          - "Packages Changed   : {{ last_patch_package_count }}"
+          - ""
+          - "Package                  Previous Version          New Version"
+          - "--------------------------------------------------------------"
+          - "{{ last_patch_activity_content | default('No previous successful patch activity available.') }}"
           - ""
           - "--------------------------------------------------------------"
           - "BACKUP / SNAPSHOT"
@@ -328,16 +412,6 @@
           - "Snapshot ID        : {{ compliance_snapshot_id }}"
           - "Snapshot State     : {{ compliance_snapshot_state }}"
           - "Snapshot Status    : {{ final_snapshot_status }}"
-          - ""
-          - "--------------------------------------------------------------"
-          - "PATCH ACTIVITY"
-          - "--------------------------------------------------------------"
-          - "Package                  Previous Version          New Version"
-          - "--------------------------------------------------------------"
-          - "{{ patch_activity_content | default('No package changes detected.') }}"
-          - ""
-          - "Total Packages Changed : {{ packages_changed }}"
-          - "Patch Activity Status  : {{ patch_activity_status }}"
           - ""
           - "--------------------------------------------------------------"
           - "POST-PATCH VALIDATION"
@@ -363,7 +437,7 @@
 
 
     # ============================================================
-    # 15. FAIL JOB IF NON-COMPLIANT
+    # 16. FAIL JOB IF NON-COMPLIANT
     # ============================================================
 
     - name: Fail if server is non-compliant
@@ -376,7 +450,7 @@
 
 
     # ============================================================
-    # 16. SUCCESS MESSAGE
+    # 17. SUCCESS MESSAGE
     # ============================================================
 
     - name: Compliance report completed successfully
@@ -386,7 +460,8 @@
           - "LINUX PATCH COMPLIANCE: COMPLIANT"
           - "=============================================================="
           - "Server              : {{ hostname_result.stdout | trim }}"
-          - "Packages Changed    : {{ packages_changed }}"
+          - "Current Packages    : {{ current_packages_changed }}"
+          - "Last Successful     : {{ last_patch_package_count }}"
           - "Snapshot Status     : {{ final_snapshot_status }}"
           - "Post Check          : {{ post_check_status }}"
           - "Health Check        : {{ health_check_status }}"
